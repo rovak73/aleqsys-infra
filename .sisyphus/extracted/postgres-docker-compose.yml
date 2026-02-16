@@ -1,0 +1,15 @@
+version: "3.8"
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=db_admin
+      - POSTGRES_PASSWORD=9yKZ4o2VZShFKxLNkbhuJeqU2N5N5ijV
+      - POSTGRES_DB=aleqsys_com
+    ports:
+      - "127.0.0.1:5432:5432"  # Local-only for security
+    volumes:
+      - ~/postgres-data:/var/lib/postgresql/data
