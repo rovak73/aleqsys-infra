@@ -1,0 +1,24 @@
+# Aleqsys Caddyfile - Staging Configuration
+# Placeholder - To be updated with actual server config after SSH extraction
+# See plan: .sisyphus/plans/aleqsys-infra-cicd.md Task 5
+
+{
+  email admin@aleqsys.com
+  auto_https disable_redirects
+}
+
+# Staging environment
+staging.aleqsys.com {
+  # Basic auth protection
+  basic_auth {
+    admin $2a$10$...hashed_password...
+  }
+  
+  reverse_proxy unix//run/gunicorn-staging/gunicorn.sock
+  encode gzip
+}
+
+# n8n (shared with production)
+n8n.aleqsys.com {
+  reverse_proxy localhost:5678
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=Aleqsys Gunicorn Daemon
+After=network.target
+
+[Service]
+Type=notify
+User=www-data
+Group=www-data
+RuntimeDirectory=gunicorn
+WorkingDirectory=/var/www/aleqsys.com/aleqsys_app
+Environment="PATH=/var/www/aleqsys.com/.venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=aleqsys_app.settings.production"
+EnvironmentFile=/home/rovak/aleqsys_app/.env
+ExecStart=/var/www/aleqsys.com/.venv/bin/gunicorn aleqsys_app.wsgi:application --workers 4 --bind unix:/run/gunicorn/gunicorn.sock
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

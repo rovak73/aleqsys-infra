@@ -1,0 +1,24 @@
+[Unit]
+Description=Aleqsys Celery Worker
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/aleqsys.com/aleqsys_app
+Environment="PATH=/var/www/aleqsys.com/.venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=aleqsys_app.settings.production"
+EnvironmentFile=/home/rovak/aleqsys_app/.env
+ExecStart=/var/www/aleqsys.com/.venv/bin/celery -A aleqsys_app worker -Q default,celery -c 4 --loglevel=info
+ExecStop=/bin/kill -s TERM $MAINPID
+TimeoutStopSec=60
+KillSignal=SIGTERM
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

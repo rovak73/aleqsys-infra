@@ -1,0 +1,39 @@
+# Aleqsys Caddyfile - Production Configuration
+# Placeholder - To be updated with actual server config after SSH extraction
+# See plan: .sisyphus/plans/aleqsys-infra-cicd.md Task 4
+
+{
+  email admin@aleqsys.com
+  auto_https disable_redirects
+}
+
+# Redirect apex to www
+aleqsys.com {
+  redir https://www.aleqsys.com{uri}
+}
+
+# Marketing site
+www.aleqsys.com {
+  root * /var/www/aleqsys.com/marketing
+  file_server
+  encode gzip
+}
+
+# Main application
+app.aleqsys.com {
+  reverse_proxy unix//run/gunicorn/gunicorn.sock
+  encode gzip
+}
+
+# n8n automation
+n8n.aleqsys.com {
+  reverse_proxy localhost:5678
+}
+
+# TODO: Add staging configuration with basic_auth
+# staging.aleqsys.com {
+#   basic_auth {
+#     admin $2a$10$...hashed_password...
+#   }
+#   reverse_proxy unix//run/gunicorn-staging/gunicorn.sock
+# }
