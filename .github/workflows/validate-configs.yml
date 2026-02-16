@@ -1,0 +1,50 @@
+name: Validate Configs
+
+on:
+  pull_request:
+    paths:
+      - "caddy/**"
+      - "systemd/**"
+      - "scripts/**"
+  push:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Caddy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
+          curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+          curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+          sudo apt-get update
+          sudo apt-get install -y caddy
+
+      - name: Validate Caddyfile
+        run: |
+          if [ -f caddy/Caddyfile ]; then
+            caddy validate --config caddy/Caddyfile
+          fi
+          if [ -f caddy/Caddyfile.staging ]; then
+            caddy validate --config caddy/Caddyfile.staging
+          fi
+
+      - name: Validate systemd service files
+        run: |
+          # Only run if there are .service files to avoid glob failure
+          if ls systemd/*.service >/dev/null 2>&1; then
+            systemd-analyze verify systemd/*.service
+          fi
+
+      - name: Run shellcheck
+        run: |
+          # shellcheck is pre-installed on ubuntu-latest
+          if ls scripts/*.sh >/dev/null 2>&1; then
+            shellcheck scripts/*.sh
+          fi
