@@ -1,0 +1,259 @@
+name: Deploy Infrastructure Configs
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: infra-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SSH_USER: ${{ secrets.INFRA_SSH_USER }}
+  SSH_HOST: ${{ secrets.INFRA_SSH_HOST }}
+  SSH_KEY: ${{ secrets.INFRA_SSH_PRIVATE_KEY }}
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    if: github.event.inputs.environment == 'staging'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.INFRA_SSH_PRIVATE_KEY }}
+          log-public-key: false
+
+      - name: Add host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.INFRA_SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Create temp directory on server
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "mkdir -p /tmp/infra-deploy-${{ github.run_id }}"
+
+      - name: Copy configs to temp location
+        run: |
+          scp caddy/Caddyfile.staging ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }}:/tmp/infra-deploy-${{ github.run_id }}/Caddyfile
+          scp systemd/*.service ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }}:/tmp/infra-deploy-${{ github.run_id }}/
+          scp -r docker/ ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }}:/tmp/infra-deploy-${{ github.run_id }}/
+
+      - name: Validate configs on server
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo caddy validate --config /tmp/infra-deploy-${{ github.run_id }}/Caddyfile"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "cd /tmp/infra-deploy-${{ github.run_id }}/docker/n8n && docker-compose config > /dev/null"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "cd /tmp/infra-deploy-${{ github.run_id }}/docker/postgres && docker-compose config > /dev/null"
+
+      - name: Backup existing configs
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo mkdir -p /var/backups/infra/$(date +%Y%m%d-%H%M%S)"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /etc/caddy/Caddyfile /var/backups/infra/*/ 2>/dev/null || true"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /etc/systemd/system/*.service /var/backups/infra/*/ 2>/dev/null || true"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /home/rovak/n8n/docker-compose.yml /var/backups/infra/*/ 2>/dev/null || true"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /home/rovak/postgres-pgvector/docker-compose.yml /var/backups/infra/*/ 2>/dev/null || true"
+
+      - name: Deploy configs to final location
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /tmp/infra-deploy-${{ github.run_id }}/Caddyfile /etc/caddy/"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /tmp/infra-deploy-${{ github.run_id }}/*.service /etc/systemd/system/"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /tmp/infra-deploy-${{ github.run_id }}/docker/n8n/docker-compose.yml /home/rovak/n8n/"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /tmp/infra-deploy-${{ github.run_id }}/docker/postgres/docker-compose.yml /home/rovak/postgres-pgvector/"
+
+      - name: Reload systemd and services
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo systemctl daemon-reload"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo systemctl reload caddy"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo systemctl reload-or-restart gunicorn-staging"
+
+      - name: Restart Docker services
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "cd /home/rovak/n8n && docker-compose up -d"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "cd /home/rovak/postgres-pgvector && docker-compose up -d"
+
+      - name: Health check
+        run: |
+          sleep 5
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "curl -s https://staging.aleqsys.com/health/ || curl -s https://staging.aleqsys.com/"
+
+      - name: Cleanup temp files
+        if: always()
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "rm -rf /tmp/infra-deploy-${{ github.run_id }}"
+
+      - name: Notify Slack - Success
+        if: success()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "✅ Staging deployment successful",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Infrastructure deployed to staging*\nCommit: ${{ github.sha }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Notify Slack - Failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "❌ Staging deployment failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Infrastructure deployment to staging FAILED*\nCommit: ${{ github.sha }}\nCheck logs for details."
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    if: github.event.inputs.environment == 'production'
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.INFRA_SSH_PRIVATE_KEY }}
+          log-public-key: false
+
+      - name: Add host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.INFRA_SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Verify staging is healthy
+        run: |
+          STAGING_STATUS=$(ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "curl -s -o /dev/null -w '%{http_code}' https://staging.aleqsys.com/health/ || curl -s -o /dev/null -w '%{http_code}' https://staging.aleqsys.com/")
+          if [ "$STAGING_STATUS" != "200" ]; then
+            echo "❌ Staging is not healthy (HTTP $STAGING_STATUS). Aborting production deployment."
+            exit 1
+          fi
+          echo "✅ Staging is healthy (HTTP $STAGING_STATUS). Proceeding with production deployment."
+
+      - name: Create temp directory on server
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "mkdir -p /tmp/infra-deploy-${{ github.run_id }}"
+
+      - name: Copy configs to temp location
+        run: |
+          scp caddy/Caddyfile ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }}:/tmp/infra-deploy-${{ github.run_id }}/
+          scp systemd/*.service ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }}:/tmp/infra-deploy-${{ github.run_id }}/
+          scp -r docker/ ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }}:/tmp/infra-deploy-${{ github.run_id }}/
+
+      - name: Validate configs on server
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo caddy validate --config /tmp/infra-deploy-${{ github.run_id }}/Caddyfile"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "cd /tmp/infra-deploy-${{ github.run_id }}/docker/n8n && docker-compose config > /dev/null"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "cd /tmp/infra-deploy-${{ github.run_id }}/docker/postgres && docker-compose config > /dev/null"
+
+      - name: Backup existing configs
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo mkdir -p /var/backups/infra/$(date +%Y%m%d-%H%M%S)"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /etc/caddy/Caddyfile /var/backups/infra/*/ 2>/dev/null || true"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /etc/systemd/system/*.service /var/backups/infra/*/ 2>/dev/null || true"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /home/rovak/n8n/docker-compose.yml /var/backups/infra/*/ 2>/dev/null || true"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /home/rovak/postgres-pgvector/docker-compose.yml /var/backups/infra/*/ 2>/dev/null || true"
+
+      - name: Deploy configs to final location
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /tmp/infra-deploy-${{ github.run_id }}/Caddyfile /etc/caddy/"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /tmp/infra-deploy-${{ github.run_id }}/*.service /etc/systemd/system/"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /tmp/infra-deploy-${{ github.run_id }}/docker/n8n/docker-compose.yml /home/rovak/n8n/"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo cp /tmp/infra-deploy-${{ github.run_id }}/docker/postgres/docker-compose.yml /home/rovak/postgres-pgvector/"
+
+      - name: Reload systemd and services
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo systemctl daemon-reload"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo systemctl reload caddy"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo systemctl reload-or-restart gunicorn"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo systemctl reload-or-restart celery"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "sudo systemctl reload-or-restart phoenix"
+
+      - name: Restart Docker services
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "cd /home/rovak/n8n && docker-compose up -d"
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "cd /home/rovak/postgres-pgvector && docker-compose up -d"
+
+      - name: Health check
+        run: |
+          sleep 5
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "curl -s https://app.aleqsys.com/health/ || curl -s https://app.aleqsys.com/"
+
+      - name: Cleanup temp files
+        if: always()
+        run: |
+          ssh ${{ secrets.INFRA_SSH_USER }}@${{ secrets.INFRA_SSH_HOST }} "rm -rf /tmp/infra-deploy-${{ github.run_id }}"
+
+      - name: Notify Slack - Success
+        if: success()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "✅ Production deployment successful",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Infrastructure deployed to production*\nCommit: ${{ github.sha }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Notify Slack - Failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "❌ Production deployment failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Infrastructure deployment to production FAILED*\nCommit: ${{ github.sha }}\nCheck logs for details."
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
