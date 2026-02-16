@@ -1,0 +1,19 @@
+# /etc/systemd/system/celery-worker.service
+[Unit]
+Description=Celery Worker Service
+After=network.target redis.service
+Requires=redis.service
+
+[Service]
+Type=simple
+User=rovak
+Group=rovak
+WorkingDirectory=/var/www/aleqsys.com/aleqsys_app
+ExecStart=/var/www/aleqsys.com/.venv/bin/celery -A aleqsys_app worker -l info -P gevent -c 100
+Restart=on-failure
+RestartSec=10
+Environment="PATH=/var/www/aleqsys.com/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DJANGO_ENV=production"
+
+[Install]
+WantedBy=multi-user.target

@@ -1,28 +1,27 @@
-version: "3.8"
-
 services:
   n8n:
-    image: n8nio/n8n:latest
-    restart: always
+    image: n8nio/n8n:1.100.1
+    restart: unless-stopped
+    network_mode: host
     ports:
       - "5678:5678"
     environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_USER}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
-      - N8N_HOST=${N8N_DOMAIN}
-      - N8N_PORT=5678
+      - N8N_EDITOR_BASE_URL=https://n8n.aleqsys.com/
+      - N8N_USER_MANAGEMENT_ENABLED=true
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=n8n.aleqsys.com
       - N8N_PROTOCOL=https
-      - WEBHOOK_URL=https://${N8N_DOMAIN}/
-      - GENERIC_TIMEZONE=UTC
+      - N8N_PORT=5678
+      - WEBHOOK_URL=https://n8n.aleqsys.com
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true
+      - GENERIC_TIMEZONE=America/Santiago
     volumes:
       - n8n_data:/home/node/.n8n
-    networks:
-      - n8n_network
+
 
 volumes:
   n8n_data:
 
-networks:
-  n8n_network:
-    driver: bridge

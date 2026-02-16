@@ -1,39 +1,78 @@
-# Aleqsys Caddyfile - Production Configuration
-# Placeholder - To be updated with actual server config after SSH extraction
-# See plan: .sisyphus/plans/aleqsys-infra-cicd.md Task 4
-
+# Global options & Snippets
 {
-  email admin@aleqsys.com
-  auto_https disable_redirects
+    acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
 }
 
-# Redirect apex to www
+(cloudflare_tls) {
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+}
+
+# 1. Drop direct IP scans
+:80, :443 {
+    @ip {
+        header_regexp host Host ^[0-9.]+$
+    }
+    abort @ip
+}
+
+# 2. Apex Redirect (aleqsys.com -> www.aleqsys.com)
 aleqsys.com {
-  redir https://www.aleqsys.com{uri}
+    redir https://www.aleqsys.com{uri} permanent
 }
 
-# Marketing site
+# 3. Marketing Site (www.)
 www.aleqsys.com {
-  root * /var/www/aleqsys.com/marketing
-  file_server
-  encode gzip
+    import cloudflare_tls
+    root * /var/www/aleqsys.com/marketing  # Update to your marketing folder
+    file_server
 }
 
-# Main application
+# 4. Main Application (app.)
 app.aleqsys.com {
-  reverse_proxy unix//run/gunicorn/gunicorn.sock
-  encode gzip
+    import cloudflare_tls
+
+    # Static/Media for the App
+    handle_path /static/* {
+        root * /var/www/aleqsys.com/aleqsys_app/staticfiles/
+        file_server
+    }
+    handle_path /media/* {
+        root * /var/www/aleqsys.com/aleqsys_app/media/
+        file_server
+    }
+
+    # The App Backend
+    reverse_proxy unix//run/gunicorn/gunicorn.sock
 }
 
-# n8n automation
+# 5. Automation Tool (n8n.)
 n8n.aleqsys.com {
-  reverse_proxy localhost:5678
+    import cloudflare_tls
+    reverse_proxy localhost:5678 {
+        flush_interval -1
+    }
 }
 
-# TODO: Add staging configuration with basic_auth
-# staging.aleqsys.com {
-#   basic_auth {
-#     admin $2a$10$...hashed_password...
-#   }
-#   reverse_proxy unix//run/gunicorn-staging/gunicorn.sock
-# }
+# 6. Staging Environment
+staging.aleqsys.com {
+    import cloudflare_tls
+    
+    # Root for staging files
+    root * /var/www/staging.aleqsys.com
+    
+    # Enable file server (if it's a static site) 
+    # OR reverse_proxy (if it's a second copy of your Gunicorn app)
+    file_server 
+    
+    # Optional: Password protect staging so the public (and Google) can't see it
+    basic_auth {
+        # Generate hash using: caddy hash-password --plaintext "mypassword"
+        admin $2a$14$zIaxMmY9zIn..your..hashed..password..here
+    }
+
+    log {
+        output file /var/log/caddy/staging_access.log
+    }
+}
