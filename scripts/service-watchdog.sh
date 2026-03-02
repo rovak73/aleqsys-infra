@@ -1,6 +1,7 @@
 #!/bin/bash
 
-SERVICES="gunicorn gunicorn-staging celery phoenix caddy"
+SYSTEMD_SERVICES="aleqsys-production aleqsys-staging celery-worker celery-beat caddy"
+DOCKER_SERVICES="phoenix n8n"
 RESTART_FAILED=${WATCHDOG_RESTART:-false}
 SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-""}
 
@@ -9,7 +10,9 @@ OVERALL="healthy"
 SERVICES_JSON="{"
 
 FIRST=true
-for SERVICE in $SERVICES; do
+
+# Check systemd services
+for SERVICE in $SYSTEMD_SERVICES; do
     STATUS=$(systemctl is-active "$SERVICE" 2>/dev/null)
     if [ -z "$STATUS" ]; then
         STATUS="unknown"
@@ -34,7 +37,37 @@ for SERVICE in $SERVICES; do
         SERVICES_JSON="$SERVICES_JSON,"
     fi
 
-    SERVICES_JSON="$SERVICES_JSON \"$SERVICE\": { \"status\": \"$STATUS\", \"state\": \"$STATE\" }"
+    SERVICES_JSON="$SERVICES_JSON \"$SERVICE\": { \"status\": \"$STATUS\", \"state\": \"$STATE\", \"type\": \"systemd\" }"
+done
+
+# Check Docker services
+for SERVICE in $DOCKER_SERVICES; do
+    # Check if container is running
+    CONTAINER_STATUS=$(docker ps --filter "name=${SERVICE}" --format "{{.Status}}" 2>/dev/null)
+    if [ -n "$CONTAINER_STATUS" ]; then
+        STATUS="active"
+        STATE="running"
+    else
+        # Check if container exists but is stopped
+        CONTAINER_EXISTS=$(docker ps -a --filter "name=${SERVICE}" --format "{{.Status}}" 2>/dev/null)
+        if [ -n "$CONTAINER_EXISTS" ]; then
+            STATUS="inactive"
+            STATE="stopped"
+            OVERALL="degraded"
+        else
+            STATUS="unknown"
+            STATE="not_found"
+            OVERALL="degraded"
+        fi
+    fi
+
+    if [ "$FIRST" = true ]; then
+        FIRST=false
+    else
+        SERVICES_JSON="$SERVICES_JSON,"
+    fi
+
+    SERVICES_JSON="$SERVICES_JSON \"$SERVICE\": { \"status\": \"$STATUS\", \"state\": \"$STATE\", \"type\": \"docker\" }"
 done
 
 SERVICES_JSON="$SERVICES_JSON }"

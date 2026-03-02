@@ -1,0 +1,27 @@
+[Unit]
+Description=Aleqsys Production Uvicorn ASGI Server
+After=network.target
+
+[Service]
+Type=simple
+User=deploy-infra
+Group=deploy-infra
+RuntimeDirectory=aleqsys-prod
+RuntimeDirectoryMode=0755
+WorkingDirectory=/var/www/aleqsys.com/aleqsys_app
+Environment="PATH=/var/www/aleqsys.com/.venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=aleqsys_app.settings.production"
+ExecStart=/var/www/aleqsys.com/.venv/bin/uvicorn aleqsys_app.asgi:application \
+    --uds /run/aleqsys-prod/uvicorn.sock \
+    --workers 2 \
+    --loop uvloop \
+    --http httptools \
+    --no-access-log
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/aleqsys/production-uvicorn.log
+StandardError=append:/var/log/aleqsys/production-uvicorn.log
+
+[Install]
+WantedBy=multi-user.target

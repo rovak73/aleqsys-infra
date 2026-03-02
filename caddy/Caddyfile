@@ -25,13 +25,27 @@ aleqsys.com {
 # 3. Marketing Site (www.)
 www.aleqsys.com {
     import cloudflare_tls
-    root * /var/www/aleqsys.com/marketing  # Update to your marketing folder
-    file_server
+    encode zstd gzip
+
+    root * /var/www/aleqsys.com
+
+    # Static/Media for the App
+    handle_path /static/* {
+        root * /var/www/aleqsys.com/aleqsys_app/staticfiles/
+        file_server
+    }
+    handle_path /media/* {
+        root * /var/www/aleqsys.com/aleqsys_app/media/
+        file_server
+    }
+
+    reverse_proxy unix//run/aleqsys-prod/uvicorn.sock
 }
 
 # 4. Main Application (app.)
 app.aleqsys.com {
     import cloudflare_tls
+    encode zstd gzip
 
     # Static/Media for the App
     handle_path /static/* {
@@ -44,7 +58,7 @@ app.aleqsys.com {
     }
 
     # The App Backend
-    reverse_proxy unix//run/gunicorn/gunicorn.sock
+    reverse_proxy unix//run/aleqsys-prod/uvicorn.sock
 }
 
 # 5. Automation Tool (n8n.)
@@ -55,22 +69,59 @@ n8n.aleqsys.com {
     }
 }
 
-# 6. Staging Environment
-staging.aleqsys.com {
+# 6. LLM Observability (phoenix.)
+phoenix.aleqsys.com {
     import cloudflare_tls
-    
-    # Root for staging files
-    root * /var/www/staging.aleqsys.com
-    
-    # Enable file server (if it's a static site) 
-    # OR reverse_proxy (if it's a second copy of your Gunicorn app)
-    file_server 
-    
-    # Optional: Password protect staging so the public (and Google) can't see it
-    basic_auth {
-        # Generate hash using: caddy hash-password --plaintext "mypassword"
-        admin $2a$14$zIaxMmY9zIn..your..hashed..password..here
+    basicauth {
+        admin $2a$14$2MrzgsnSBPWHAw.0prWHb.3/uq4JCiSOD6wwLTId4U5A5WolLGiqm
     }
+    reverse_proxy localhost:6006
+}
+phoenix.aleqsys.com {
+    import cloudflare_tls
+    reverse_proxy localhost:6006
+}
+
+# 7. Staging Environment (app)
+app-staging.aleqsys.com {
+    import cloudflare_tls
+
+    root * /var/www/staging.aleqsys.com
+
+    # Static/Media for the App
+    handle_path /static/* {
+        root * /var/www/staging.aleqsys.com/aleqsys_app/staticfiles/
+        file_server
+    }
+    handle_path /media/* {
+        root * /var/www/staging.aleqsys.com/aleqsys_app/media/
+        file_server
+    }
+
+    reverse_proxy 127.0.0.1:8001
+
+    log {
+        output file /var/log/caddy/staging_access.log
+    }
+}
+
+# 8. Staging Environment (www)
+www-staging.aleqsys.com {
+    import cloudflare_tls
+
+    root * /var/www/staging.aleqsys.com
+
+    # Static/Media for the App
+    handle_path /static/* {
+        root * /var/www/staging.aleqsys.com/aleqsys_app/staticfiles/
+        file_server
+    }
+    handle_path /media/* {
+        root * /var/www/staging.aleqsys.com/aleqsys_app/media/
+        file_server
+    }
+
+    reverse_proxy 127.0.0.1:8001
 
     log {
         output file /var/log/caddy/staging_access.log

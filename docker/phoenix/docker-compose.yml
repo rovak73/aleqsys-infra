@@ -1,0 +1,19 @@
+services:
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6006:6006"  # UI and OTLP HTTP collector (local-only for Caddy)
+      - "127.0.0.1:4317:4317"  # OTLP gRPC collector (local-only)
+    environment:
+      - PHOENIX_PORT=6006
+      - PHOENIX_GRPC_PORT=4317
+      - PHOENIX_WORKING_DIR=/mnt/data
+      # Uncomment to use existing PostgreSQL instead of SQLite:
+      # - PHOENIX_SQL_DATABASE_URL=${PHOENIX_DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/phoenix}
+    volumes:
+      - phoenix_data:/mnt/data
+
+volumes:
+  phoenix_data:
+    driver: local

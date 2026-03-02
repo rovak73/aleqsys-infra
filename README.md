@@ -7,16 +7,16 @@ Infrastructure management and server configuration for the Aleqsys platform (`al
 This repository manages the "glue" that keeps the Aleqsys services running. It handles:
 
 - **Reverse Proxy**: Caddy configuration for automatic SSL and routing
-- **Service Management**: systemd unit files for Gunicorn, Celery, and other backend tasks
-- **Containerization**: Docker Compose setups for isolated services like n8n and observability tools
+- **Service Management**: systemd unit files for Uvicorn (ASGI), Celery, and backend tasks
+- **Containerization**: Docker Compose setups for isolated services like n8n, PostgreSQL, and Phoenix
 - **Monitoring**: Automated scripts for health checks, disk usage, and service watchdogs
 - **CI/CD**: Validation pipelines to ensure configurations are syntax-correct before deployment
 
 ## Server Details
 
 - **IP Address**: `34.148.211.128`
-- **Main App Repo**: `/home/rovak/dev/aleqsys.com`
-- **Primary Stack**: Caddy, Docker, Python/Django, Svelte 5
+- **Main App Repo**: `/var/www/aleqsys.com`
+- **Primary Stack**: Caddy, Docker, Python/Django (ASGI via Uvicorn), Svelte 5
 
 ## Directory Structure
 
@@ -28,17 +28,22 @@ aleqsys-infra/
 ├── docker/                     # Docker Compose files
 │   ├── n8n/
 │   │   └── docker-compose.yml
-│   └── postgres/
+│   ├── postgres/
+│   │   └── docker-compose.yml
+│   └── phoenix/                # LLM Observability Platform
 │       └── docker-compose.yml
 ├── scripts/                    # Infrastructure monitoring and maintenance
 │   ├── health-check.sh         # HTTP endpoint monitoring
 │   ├── disk-monitor.sh         # Disk usage tracking + Docker cleanup
-│   └── service-watchdog.sh     # systemd service state monitoring
-├── systemd/                    # Unit files for gunicorn, celery, etc.
-│   ├── gunicorn.service
-│   ├── gunicorn-staging.service
-│   ├── celery.service
-│   └── phoenix.service
+│   ├── service-watchdog.sh     # systemd + Docker service state monitoring
+│   └── phoenix-backup.sh       # Phoenix observability data backup
+├── systemd/                    # Unit files for application services
+│   ├── aleqsys-production.service    # Production Uvicorn ASGI
+│   ├── aleqsys-staging.service       # Staging Uvicorn ASGI
+│   ├── celery-worker.service
+│   ├── celery-beat.service
+│   ├── caddy.service
+│   └── phoenix.service               # Docker Compose wrapper
 ├── .github/workflows/          # CI/CD pipelines
 │   ├── validate-configs.yml    # Pre-merge validation
 │   └── deploy-configs.yml      # Atomic deployment workflow
@@ -92,8 +97,8 @@ sudo cp systemd/*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
 # Enable and start services
-sudo systemctl enable gunicorn celery caddy
-sudo systemctl start gunicorn celery caddy
+sudo systemctl enable aleqsys-production aleqsys-staging celery-worker celery-beat caddy
+sudo systemctl start aleqsys-production aleqsys-staging celery-worker celery-beat caddy
 ```
 
 #### Docker Services
@@ -104,6 +109,9 @@ cd docker/n8n && docker-compose up -d
 
 # Start PostgreSQL
 cd docker/postgres && docker-compose up -d
+
+# Start Phoenix (LLM Observability)
+cd docker/phoenix && docker-compose up -d
 ```
 
 #### Monitoring Scripts
@@ -136,6 +144,7 @@ The infrastructure relies on the `BASE_DOMAIN` variable in `.env`:
 - `app.aleqsys.com` (Main application)
 - `staging.aleqsys.com` (Staging environment)
 - `n8n.aleqsys.com` (Automation platform)
+- `phoenix.aleqsys.com` (LLM Observability - Arize Phoenix)
 
 ### Cross-Repository Updates
 
@@ -157,6 +166,7 @@ WWW_DOMAIN=www.aleqsys.com
 APP_DOMAIN=app.aleqsys.com
 STAGING_DOMAIN=staging.aleqsys.com
 N8N_DOMAIN=n8n.aleqsys.com
+PHOENIX_DOMAIN=phoenix.aleqsys.com
 
 # Django Settings
 DEBUG=false
@@ -282,7 +292,90 @@ Monitors systemd services and reports status:
 ./scripts/service-watchdog.sh
 ```
 
-Monitors: `gunicorn`, `gunicorn-staging`, `celery`, `phoenix`, `caddy`
+Monitors systemd services: `aleqsys-production`, `aleqsys-staging`, `celery-worker`, `celery-beat`, `caddy`
+
+Monitors Docker containers: `phoenix`, `n8n`
+
+### Phoenix (LLM Observability)
+
+[Arize Phoenix](https://docs.arize.com/phoenix) is an open-source LLM observability platform for monitoring, evaluating, and experimenting with LLM applications.
+
+**Features:**
+- Trace and visualize LLM calls and chains
+- Collect spans via OpenTelemetry (OTLP)
+- Evaluate model performance and latency
+- Built-in evaluation datasets and experiments
+
+**Access:**
+Navigate to `https://phoenix.aleqsys.com` after deployment.
+
+**Ports:**
+- `6006` - Phoenix UI and OTLP HTTP collector
+- `4317` - OTLP gRPC collector
+
+**Integration:**
+To send traces from your application:
+
+```python
+# Install the Phoenix OTEL exporter
+pip install arize-phoenix-otel opentelemetry-exporter-otlp
+
+# Configure your app to send traces
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+# Phoenix collector endpoint
+otlp_exporter = OTLPSpanExporter(
+    endpoint="http://localhost:4317",
+    insecure=True
+)
+
+tracer_provider = TracerProvider()
+tracer_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+trace.set_tracer_provider(tracer_provider)
+```
+
+**Database Strategy:**
+Phoenix uses SQLite by default (stored in Docker volume `phoenix_data`). Current data size: ~3.5MB.
+
+**Why SQLite is fine:**
+- Phoenix data is telemetry/traces (not critical - app works without it)
+- Single-node deployment, low write volume
+- SQLite WAL mode handles concurrency well
+- Easy to backup/restore
+
+**When to migrate to PostgreSQL:**
+- Data grows beyond ~1GB
+- Need high availability / multi-node
+- Heavy concurrent write load
+
+**Automated Backups:**
+A daily backup runs at 3am via cron:
+```bash
+# Check backup status
+ls -la /opt/backups/phoenix/
+
+# Manual backup
+/opt/aleqsys-infra/scripts/phoenix-backup.sh
+
+# Restore from backup (stop Phoenix first)
+docker-compose -f docker/phoenix/docker-compose.yml down
+docker run --rm -v phoenix_phoenix_data:/data -v /opt/backups/phoenix:/backup alpine sh -c "cd /data && tar xzf /backup/phoenix_backup_YYYYMMDD_HHMMSS.tar.gz"
+docker-compose -f docker/phoenix/docker-compose.yml up -d
+```
+
+**PostgreSQL Option:**
+To use the existing PostgreSQL container instead of SQLite, edit `docker/phoenix/docker-compose.yml`:
+```yaml
+environment:
+  - PHOENIX_SQL_DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/phoenix
+```
+Then create the database: `docker exec postgres-db psql -U postgres -c "CREATE DATABASE phoenix;"`
+By default, Phoenix uses SQLite with a Docker volume (`phoenix_data`). For production, consider:
+- Backing up the volume: `docker run --rm -v phoenix_data:/data -v $(pwd):/backup alpine tar czf /backup/phoenix-backup.tar.gz -C /data .`
+- Or configuring external PostgreSQL (see `.env.example`)
 
 ## Troubleshooting
 

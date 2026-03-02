@@ -1,0 +1,27 @@
+[Unit]
+Description=Aleqsys Staging Uvicorn ASGI Server
+After=network.target
+
+[Service]
+Type=simple
+User=deploy-infra
+Group=deploy-infra
+WorkingDirectory=/var/www/staging.aleqsys.com/aleqsys_app
+Environment="PATH=/var/www/staging.aleqsys.com/.venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=aleqsys_app.settings.staging"
+# We keep the port 8001 but add the performance loops and drop to 1 worker
+ExecStart=/var/www/staging.aleqsys.com/.venv/bin/uvicorn aleqsys_app.asgi:application \
+    --host 127.0.0.1 \
+    --port 8001 \
+    --workers 1 \
+    --loop uvloop \
+    --http httptools \
+    --no-access-log
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/aleqsys/staging-uvicorn.log
+StandardError=append:/var/log/aleqsys/staging-uvicorn.log
+
+[Install]
+WantedBy=multi-user.target
